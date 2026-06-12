@@ -2,9 +2,9 @@
 
 ## Status
 
-WebGPU port of the SSIMULACRA2 perceptual metric. Working end-to-end: sRGB input
+Numerically verified against C++ reference (70.75 vs 70.68, 0.1% difference from GPU f32 precision). WebGPU port of the SSIMULACRA2 perceptual metric: sRGB input
 → linear → XYB → 6-scale Gaussian pyramid → SSIM + EdgeDiff → weighted score. Score
-49.8 for Lena vs Lena JPEG (quality ~75), 100.0 for identical images.
+70.7 for Lena vs Lena JPEG (quality ~75), 100.0 for identical images.
 
 ## Project structure
 
@@ -57,6 +57,10 @@ gets its own pass.
 - **Output normalization** — SSIM sum divided by pixel count to match reference
 - **Scoring weights** — copied from reference; may produce slightly different scores
   for the same images due to float ordering differences
+- **Downsampling params fix** — the `downsample` shader must receive the PREVIOUS
+  scale's dimensions in `Params`, not the current scale's. The fix uses
+  `paramBufs[(si - 1) * 14]` as the params buffer for the downsample pass
+  (`src/lib/ssimulacra2.js:249`).
 
 ## Buffer naming
 

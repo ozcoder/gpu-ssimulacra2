@@ -16,12 +16,13 @@ struct Params {
 };
 `;
 
-// Opsin absorbance matrix (from libjxl kOpsinAbsorbanceMatrix)
+// Opsin absorbance matrix + bias — matches standalone ssimulacra2 / libjxl
+// (kOpsinAbsorbanceMatrix, kOpsinAbsorbanceBias)
 const OPSIN_MATRIX = `
-const OPSIN_M0 = vec3<f32>(0.2995655037, 0.5812741005, 0.1191651028);
-const OPSIN_M1 = vec3<f32>(0.1321296295, 0.6418807511, 0.2259896194);
-const OPSIN_M2 = vec3<f32>(0.0384308761, 0.1768969009, 0.7846722230);
-const OPSIN_BIAS = vec3<f32>(0.0044018226, 0.0071934268, 0.0101621615);
+const OPSIN_M0 = vec3<f32>(0.30, 0.622, 0.078);
+const OPSIN_M1 = vec3<f32>(0.23, 0.692, 0.078);
+const OPSIN_M2 = vec3<f32>(0.24342268924547819, 0.20476744424496821, 0.5518098665095536);
+const OPSIN_BIAS = vec3<f32>(0.0037930732552754493, 0.0037930732552754493, 0.0037930732552754493);
 `;
 
 // Common WGSL utilities

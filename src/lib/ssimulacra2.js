@@ -244,16 +244,17 @@ export class SSIMULACRA2Pipeline {
           ], nwgX, nwgY],
         ]);
       } else {
+        const prevPb = { buffer: this.paramBufs[(si - 1) * 14] };
         pass("downsample", [
           ["downsample", [
             [0, prevO[0]], [1, prevO[1]], [2, prevO[2]],
             [3, curO[0]], [4, curO[1]], [5, curO[2]],
-            [6, pb(0)],
+            [6, prevPb],
           ], nwgX, nwgY],
           ["downsample", [
             [0, prevD[0]], [1, prevD[1]], [2, prevD[2]],
             [3, curD[0]], [4, curD[1]], [5, curD[2]],
-            [6, pb(0)],
+            [6, prevPb],
           ], nwgX, nwgY],
         ]);
       }
