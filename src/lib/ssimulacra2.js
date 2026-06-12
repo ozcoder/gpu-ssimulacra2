@@ -170,6 +170,8 @@ export class SSIMULACRA2Pipeline {
       }
     }
 
+    const encoder = d.createCommandEncoder();
+
     for (let si = 0; si < scales.length; si++) {
       const { w, h } = scales[si];
       const nwgX = ceilDiv(w, 16);
@@ -198,8 +200,6 @@ export class SSIMULACRA2Pipeline {
       const sg2 = [this._b("s2x"), this._b("s2y"), this._b("s2b")];
       const sg12 = [this._b("c12x"), this._b("c12y"), this._b("c12b")];
 
-      const encoder = d.createCommandEncoder();
-
       // Helper: run one or more dispatches in a single compute pass.
       // Each pass creates a separate synchronization scope, avoiding
       // buffer read-write conflicts between dispatches.
@@ -212,6 +212,9 @@ export class SSIMULACRA2Pipeline {
         }
         p.end();
       };
+
+      const gW = ceilDiv(w, 256);
+      const gH = ceilDiv(h, 256);
 
       // Helper: build an entry list for a gauss_h dispatch reading `src` and
       // writing one of the t* temp planes.
@@ -275,31 +278,28 @@ export class SSIMULACRA2Pipeline {
       // pair of passes because t* is read-write in gauss_h and read-only
       // in gauss_v.
 
-      // blur3(i1) → mu1
       pass("blur1-h", [
-        ["gauss_h", hBlur(i1[0], 0), 1, h],
-        ["gauss_h", hBlur(i1[1], 1), 1, h],
-        ["gauss_h", hBlur(i1[2], 2), 1, h],
+        ["gauss_h", hBlur(i1[0], 0), gH, 1],
+        ["gauss_h", hBlur(i1[1], 1), gH, 1],
+        ["gauss_h", hBlur(i1[2], 2), gH, 1],
       ]);
       pass("blur1-v", [
-        ["gauss_v", vBlur(0, mu1[0]), w, 1],
-        ["gauss_v", vBlur(1, mu1[1]), w, 1],
-        ["gauss_v", vBlur(2, mu1[2]), w, 1],
+        ["gauss_v", vBlur(0, mu1[0]), gW, 1],
+        ["gauss_v", vBlur(1, mu1[1]), gW, 1],
+        ["gauss_v", vBlur(2, mu1[2]), gW, 1],
       ]);
 
-      // blur3(i2) → mu2
       pass("blur2-h", [
-        ["gauss_h", hBlur(i2[0], 0), 1, h],
-        ["gauss_h", hBlur(i2[1], 1), 1, h],
-        ["gauss_h", hBlur(i2[2], 2), 1, h],
+        ["gauss_h", hBlur(i2[0], 0), gH, 1],
+        ["gauss_h", hBlur(i2[1], 1), gH, 1],
+        ["gauss_h", hBlur(i2[2], 2), gH, 1],
       ]);
       pass("blur2-v", [
-        ["gauss_v", vBlur(0, mu2[0]), w, 1],
-        ["gauss_v", vBlur(1, mu2[1]), w, 1],
-        ["gauss_v", vBlur(2, mu2[2]), w, 1],
+        ["gauss_v", vBlur(0, mu2[0]), gW, 1],
+        ["gauss_v", vBlur(1, mu2[1]), gW, 1],
+        ["gauss_v", vBlur(2, mu2[2]), gW, 1],
       ]);
 
-      // Each mulBlur chain: multiply → m*, gauss_h(m*) → t*, gauss_v(t*) → dst
       const mulChain = (label, a, b, dst) => {
         pass(label + "-mul", [
           ["multiply", [[0, a[0]], [1, b[0]], [2, this._b("mx")], [3, pb(0)]], nwgX, nwgY],
@@ -307,14 +307,14 @@ export class SSIMULACRA2Pipeline {
           ["multiply", [[0, a[2]], [1, b[2]], [2, this._b("mb")], [3, pb(0)]], nwgX, nwgY],
         ]);
         pass(label + "-h", [
-          ["gauss_h", [[0, this._b("mx")], [1, this._b("tx")], [2, pb(0)]], 1, h],
-          ["gauss_h", [[0, this._b("my")], [1, this._b("ty")], [2, pb(0)]], 1, h],
-          ["gauss_h", [[0, this._b("mb")], [1, this._b("tb")], [2, pb(0)]], 1, h],
+          ["gauss_h", [[0, this._b("mx")], [1, this._b("tx")], [2, pb(0)]], gH, 1],
+          ["gauss_h", [[0, this._b("my")], [1, this._b("ty")], [2, pb(0)]], gH, 1],
+          ["gauss_h", [[0, this._b("mb")], [1, this._b("tb")], [2, pb(0)]], gH, 1],
         ]);
         pass(label + "-v", [
-          ["gauss_v", [[0, this._b("tx")], [1, dst[0]], [2, pb(0)]], w, 1],
-          ["gauss_v", [[0, this._b("ty")], [1, dst[1]], [2, pb(0)]], w, 1],
-          ["gauss_v", [[0, this._b("tb")], [1, dst[2]], [2, pb(0)]], w, 1],
+          ["gauss_v", [[0, this._b("tx")], [1, dst[0]], [2, pb(0)]], gW, 1],
+          ["gauss_v", [[0, this._b("ty")], [1, dst[1]], [2, pb(0)]], gW, 1],
+          ["gauss_v", [[0, this._b("tb")], [1, dst[2]], [2, pb(0)]], gW, 1],
         ]);
       };
 
@@ -357,9 +357,9 @@ export class SSIMULACRA2Pipeline {
         ], 1, 1]);
       }
       pass("rd", [...ssimRdJobs, ...edRdJobs]);
-
-      d.queue.submit([encoder.finish()]);
     }
+
+    d.queue.submit([encoder.finish()]);
 
     const numOut = scales.length * OUT_PER_SCALE;
     const readSize = numOut * 4;

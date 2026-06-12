@@ -1,98 +1,143 @@
-# gpu-ssimulacra2 — implementation plan
+# Performance Optimization Plan
 
-Port the SSIMULACRA2 perceptual metric to WebGPU. JavaScript library with a Vite-based demo page.
+Current score: 70.8 for Lena vs Lena JPEG (matches C++ reference within 0.1 %).
+Target: **2–4× speedup** while preserving identical numerical results.
 
-## Project structure
+---
+
+## Profiling results
+
+Processing 4032 × 3024 images (`original/20240528_225613.jpg`) takes **~60 seconds**.
+Main bottleneck: GPU dispatches with tiny workgroups.
+
+---
+
+## Root causes
+
+### 1. IIR Gaussian blur dispatches are 1×1
+
+`gauss_h` and `gauss_v` use `@workgroup_size(1, 1)`. Each invocation
+processes one row (h‑pass) or one column (v‑pass) sequentially — every
+pixel is handled by one thread. A 4032‑wide row invokes 4032 individual
+workgroups containing one thread each.
+
+**Impact:** the 6 blur passes per scale dispatch hundreds of thousands of
+tiny workgroups, paying full dispatch overhead every time.
+
+### 2. Three separate dispatches per component
+
+The mulChain pattern issues 3 sequential dispatches (one per X/Y/B
+component) for each sub‑step (multiply, h‑blur, v‑blur). These are
+independent and could share a single dispatch.
+
+### 3. Multiple `encoder.submit()` calls
+
+The pipeline calls `d.queue.submit()` once per scale (6× total). Each
+submit adds latency. The entire pipeline could be submitted in one
+`CommandEncoder` batch.
+
+### 4. Reduction passes are single‑workgroup
+
+`ssim_reduce` and `edgediff_reduce` dispatch `(1, 1)` after the
+workgroup‑level pass has already done most of the reduction. This is a
+serial CPU‑style step that cannot be parallelised — acceptable as‑is.
+
+---
+
+## Proposed optimisations
+
+### 1. Vectorise the IIR blur (high impact, ~3× faster)
+
+Change `gauss_h` and `gauss_v` workgroups so that multiple rows/columns
+are processed per workgroup, each by a separate thread.
+
+| Shader | Current | Optimised |
+|--------|---------|-----------|
+| `gauss_h` | `@workgroup_size(1, 1)` → `1 × height` | `@workgroup_size(64, 1)` → `ceilDiv(width, 64) × height` |
+| `gauss_v` | `@workgroup_size(1, 1)` → `width × 1` | `@workgroup_size(1, 64)` → `width × ceilDiv(height, 64)` |
+
+Each thread processes one row/column; `global_invocation_id.x` steps by
+`workgroup_size.x` within the row/column instead of covering the whole
+row.
+
+**Numerical impact:** None — the per‑thread algorithm is identical, only
+the parallelisation changes.
+
+### 2. Batch the three component dispatches (medium impact)
+
+Replace:
 
 ```
-gpu-ssimulacra2/
-  package.json           # vite dev dependency
-  vite.config.js
-  index.html             # Demo page (Vite entry)
-  src/
-    lib/
-      index.js           # Library entry: exports computeSSIMULACRA2()
-      shaders.js         # All WGSL as JS strings
-      pipeline.js        # WebGPU init, pipeline & bind group factories
-      ssimulacra2.js     # Main 6-scale loop orchestration
-      scoring.js         # CPU weighted sum → final 0–100 score
-    demo/
-      main.js            # Image picker, canvas, score display
-  original/              # Untouched C++ reference
+pass("s1-mul", [
+  ["multiply",  X-mul],
+  ["multiply",  Y-mul],
+  ["multiply",  B-mul],
+]);
+pass("s1-h", [
+  ["gauss_h",  X-h],
+  ["gauss_h",  Y-h],
+  ["gauss_h",  B-h],
+]);
+pass("s1-v", [
+  ["gauss_v",  X-v],
+  ["gauss_v",  Y-v],
+  ["gauss_v",  B-v],
+]);
 ```
 
-## Data flow
+With a single combined dispatch that processes all 3 components in one
+pass. Since each dispatch writes to different output buffers, the
+sync‑scope constraint is satisfied.
 
-```
-Image A/B ──<canvas>──> ImageData ──> GPU u8 buffer
-                                            │
-                                 ┌──────────▼──────────┐
-                                 │  sRGB → linear RGB  │
-                                 │  (gamma expansion)  │
-                                 └──────────┬──────────┘
-                                            │
-                                 ┌──────────▼──────────┐
-                                 │  linear RGB → XYB   │
-                                 │  MakePositiveXYB    │
-                                 └──────────┬──────────┘
-                                            │
-              ┌─────────────────────────────┼──────────────┐
-              │         scale 0             │  scales 1–5  │
-              │       (full res)            │  downsample  │
-              │                             │  linear RGB  │
-              └─────────────┬───────────────┤  re-XYB      │
-                            │               └──────────────┘
-              ┌─────────────┴──────────────────────────────┐
-              │  blur→mu1  blur→mu2  blur(mul=img1²)→σ1² │
-              │  blur(mul=img2²)→σ2²  blur(mul=p)→σ12    │
-              └─────────────────────┬─────────────────────┘
-                                    │
-              ┌─────────────────────┴─────────────────────┐
-              ▼                                           ▼
-       SSIMMap(mu1,mu2,σ²) → 6 vals    EdgeDiffMap(img1,mu1,img2,mu2) → 12 vals
-              │                                           │
-              └──────────────────┬────────────────────────┘
-                                 ▼
-                     108 sub-scores read back to CPU
-                                 │
-                        ┌────────▼────────┐
-                        │ Weighted sum    │
-                        │ → final 0–100   │
-                        └─────────────────┘
-```
+This applies to `mulChain("s1")`, `mulChain("s2")`, `mulChain("s3")`,
+`blur1`, and `blur2`.
 
-## WebGPU shaders
+**Numerical impact:** None — the same shader is invoked the same number
+of times, just grouped into fewer passes.
 
-| Shader              | Purpose                                   | Dispatch              |
-|---------------------|-------------------------------------------|-----------------------|
-| `gamma_expand`      | sRGB → linear per pixel                   | 1 thread / pixel      |
-| `linear_to_xyb`     | Linear RGB → XYB + rescale                | 1 thread / pixel      |
-| `downsample_2x`     | Box-filter 2× downscale                   | 1 thread / output px  |
-| `gauss_blur_h`      | IIR horizontal pass                       | 1 thread / row        |
-| `gauss_blur_v`      | IIR vertical pass                         | 1 thread / column     |
-| `multiply`          | Element-wise plane multiply               | 1 thread / pixel      |
-| `ssim_reduce`       | SSIM map + reduce to 6 norm values        | workgroup reduction   |
-| `edgediff_reduce`   | Edge diff map + reduce to 12 norm values  | workgroup reduction   |
+### 3. Single `submit()` (low impact, but easy)
 
-## Key design decisions
+Move the `d.queue.submit()` call outside the scale loop. Use one
+`CommandEncoder` for all scales and submit once at the end, keeping
+only the final readback as a separate submit.
 
-- **Planar f32 buffers** (3 planes per image) — matches C++ algorithm structure
-- **Buffer reuse between scales** — avoids allocating for all 6 scales simultaneously
-- **CPU scoring** — the weighted sum is trivial scalar math, not worth a GPU roundtrip
-- **IIR blur = 1 thread per row/column** — each thread serially scans its row/col
-- **Adaptive sizing** — buffers sized per-scale, not for max resolution
+**Numerical impact:** None.
 
-## Implementation order
+### 4. Increase workgroup size for element‑wise passes (trivial)
 
-1. Scaffold: `package.json`, `vite.config.js`, `.gitignore`, `index.html`
-2. `pipeline.js` — adapter/device init, factory helpers
-3. `shaders.js` — all 8 WGSL shaders
-4. `ssimulacra2.js` — main pipeline orchestration
-5. `scoring.js` — weighted sum
-6. `demo/main.js` — image picker UI, rendering, score display
+`to_linear`, `to_xyb`, `multiply`, `downsample` use `@workgroup_size(16,
+16)`. Increase to `@workgroup_size(32, 32)` to reduce dispatch overhead.
 
-## Risks
+**Numerical impact:** None — these are flat‑parallel per‑pixel kernels.
 
-- **GPU memory at 4K**: ~30 f32 planes × 33 MB ≈ 1 GB. Mitigate via buffer reuse; consider f16 if needed.
-- **IIR blur occupancy**: 1 thread/workgroup is low occupancy, but work is memory-bound sequential scan — acceptable.
-- **Browser WebGPU**: Chrome/Edge 113+, Firefox Nightly, Safari TP. Demo must check support with a clear error message.
+---
+
+## Implementation results
+
+### Done
+- **Vectorise IIR blur** — `gauss_h`/`gauss_v` changed from `@workgroup_size(1, 1)`
+  to `@workgroup_size(256)`. Rows (h‑pass) / columns (v‑pass) are now indexed via
+  `id.x` instead of `id.y`/`id.x`. Dispatch changed to `ceilDiv(N, 256) × 1`.
+  Numerical results verified identical.
+- **Single submit** — one `CommandEncoder` for all scales, submitted once after
+  the loop (plus the readback submit). No API violations.
+
+### Skipped as already optimal
+- **Batch component dispatches** — the X/Y/B dispatches for blur, multiply, and
+  reduction passes were already grouped into single compute passes (`pass()`
+  batches all 3 components). No further batching possible without introducing
+  buffer sync‑scope violations.
+- **Increase element‑wise workgroups** — `@workgroup_size(16, 16)` = 256
+  invocations, which is the mandatory `maxComputeWorkgroupInvocations` limit.
+  32×32 would exceed the spec minimum of 256.
+
+## Future work (if more speed is needed)
+
+- **Bind group caching** — `_bg()` creates a new `GPUBindGroup` for *every*
+  dispatch. Caching by `(pipeline, entries)` hash would reduce CPU-side
+  creation overhead.
+- **Shared-memory blur** — the IIR blur is inherently serial per row/column,
+  but small images (scales 4‑5) could be processed in fewer workgroups by
+  fusing the h‑pass and v‑pass into a single kernel.
+- **f16 arithmetic** — replacing `f32` with `f16` would halve memory bandwidth
+  for buffer reads/writes. Requires WebGPU `shader-f16` feature.

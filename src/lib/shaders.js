@@ -152,9 +152,9 @@ WGSL.gauss_h = `${PARAMS}
 @group(0) @binding(1) var<storage, read_write> output: array<f32>;
 @group(0) @binding(2) var<uniform> p: Params;
 
-@compute @workgroup_size(1, 1)
+@compute @workgroup_size(256)
 fn main(@builtin(global_invocation_id) id: vec3<u32>) {
-  let row = i32(id.y);
+  let row = i32(id.x);
   if (row >= i32(p.height)) { return; }
 
   var p1 = 0.0; var p2_1 = 0.0;
@@ -165,7 +165,6 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   let N = i32(p.radius);
   let base = row * W;
 
-  // Warmup: process -N+1 to -1 without writing output
   for (var n = -(N - 1); n < 0; n++) {
     let left = n - N - 1;
     let right = n + N - 1;
@@ -217,7 +216,7 @@ WGSL.gauss_v = `${PARAMS}
 @group(0) @binding(1) var<storage, read_write> output: array<f32>;
 @group(0) @binding(2) var<uniform> p: Params;
 
-@compute @workgroup_size(1, 1)
+@compute @workgroup_size(256)
 fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   let col = i32(id.x);
   if (col >= i32(p.width)) { return; }
@@ -230,7 +229,6 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   let H = i32(p.height);
   let N = i32(p.radius);
 
-  // Warmup: process -N+1 to -1 without writing output
   for (var n = -(N - 1); n < 0; n++) {
     let top = n - N - 1;
     let bot = n + N - 1;
