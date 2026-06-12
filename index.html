@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>gpu-ssimulacra2</title>
+  <link rel="icon" href="/favicon.ico" sizes="32x32" />
+  <link rel="icon" href="/favicon.ico" sizes="16x16" type="image/x-icon" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #111; color: #e0e0e0; min-height: 100vh;
+      display: flex; flex-direction: column; align-items: center;
+      padding: 2rem 1rem;
+    }
+    h1 { font-size: 1.5rem; margin-bottom: 0.25rem; }
+    p.sub { color: #888; margin-bottom: 2rem; font-size: 0.875rem; }
+
+    .upload-area {
+      display: flex; gap: 2rem; flex-wrap: wrap; justify-content: center;
+      margin-bottom: 2rem;
+    }
+    .upload-box {
+      border: 2px dashed #444; border-radius: 8px; padding: 1rem;
+      text-align: center; cursor: pointer; transition: border-color 0.2s;
+      min-width: 200px;
+    }
+    .upload-box:hover { border-color: #888; }
+    .upload-box.dragover { border-color: #4fc3f7; background: #1a2a33; }
+    .upload-box label { display: block; cursor: pointer; }
+    .upload-box input { display: none; }
+    .upload-box img {
+      display: block; max-width: 300px; max-height: 200px;
+      margin-top: 0.5rem; border-radius: 4px;
+    }
+    .upload-box .placeholder {
+      padding: 3rem 1rem; color: #666; font-size: 0.875rem;
+    }
+
+    .controls { display: flex; gap: 1rem; align-items: center; margin-bottom: 2rem; }
+    button {
+      background: #4fc3f7; color: #111; border: none; padding: 0.6rem 1.5rem;
+      border-radius: 6px; font-size: 1rem; font-weight: 600; cursor: pointer;
+      transition: opacity 0.2s;
+    }
+    button:disabled { opacity: 0.4; cursor: not-allowed; }
+    button:not(:disabled):hover { opacity: 0.85; }
+
+    #result { font-size: 2rem; font-weight: 700; margin-bottom: 0.25rem; }
+    #result-label { font-size: 0.875rem; color: #888; margin-bottom: 2rem; }
+
+    #error {
+      color: #ff6b6b; background: #2a1111; border: 1px solid #ff6b6b44;
+      border-radius: 6px; padding: 1rem; max-width: 500px; display: none;
+    }
+    #nogpu {
+      color: #ffa726; background: #2a1f11; border: 1px solid #ffa72644;
+      border-radius: 6px; padding: 1rem; max-width: 500px; display: none;
+    }
+    canvas { display: none; }
+  </style>
+</head>
+<body>
+  <h1>gpu-ssimulacra2</h1>
+  <p class="sub">WebGPU‑accelerated perceptual image quality metric</p>
+
+  <div id="nogpu">WebGPU is not available in this browser.</div>
+  <div id="error"></div>
+
+  <div class="upload-area">
+    <div class="upload-box" id="box-orig">
+      <label>
+        <input type="file" accept="image/*" id="file-orig" />
+        <div class="placeholder" id="placeholder-orig">Original image<br/><span style="font-size:0.75rem;color:#555">click to upload</span></div>
+        <img id="preview-orig" style="display:none" />
+      </label>
+    </div>
+    <div class="upload-box" id="box-dist">
+      <label>
+        <input type="file" accept="image/*" id="file-dist" />
+        <div class="placeholder" id="placeholder-dist">Distorted image<br/><span style="font-size:0.75rem;color:#555">click to upload</span></div>
+        <img id="preview-dist" style="display:none" />
+      </label>
+    </div>
+  </div>
+
+  <div class="controls">
+    <button id="btn-compare" disabled>Compare</button>
+  </div>
+
+  <div id="result"></div>
+  <div id="result-label"></div>
+
+  <canvas id="canvas"></canvas>
+
+  <script type="module" src="/src/demo/main.js"></script>
+</body>
+</html>
